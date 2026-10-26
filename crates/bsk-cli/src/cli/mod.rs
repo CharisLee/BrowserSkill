@@ -7,8 +7,10 @@ pub mod browser_wait;
 pub mod browsers;
 pub mod business_rpc;
 pub mod console;
+pub mod cooperate;
 pub mod daemon;
 pub mod debug;
+pub mod dialog_control;
 pub mod dialogs;
 pub mod doctor;
 pub mod download;
@@ -26,6 +28,7 @@ pub mod logs;
 pub mod navigate;
 pub mod network;
 pub mod observe;
+pub(crate) mod protocol;
 pub mod record;
 pub mod record_recovery;
 pub mod record_state;
@@ -79,6 +82,12 @@ pub const TOOL_IPC_TIMEOUT: Duration = Duration::from_secs(35);
 /// Global flags shared by every subcommand.
 #[derive(Debug, Clone, Args, Default)]
 pub struct GlobalFlags {
+    /// Observation context returned by cooperate sync. Required for shared-tab actions.
+    #[arg(long, global = true)]
+    pub context: Option<String>,
+    /// Observed refs/selectors covering this decision. Repeat for other regions; omit to validate the whole page.
+    #[arg(long, global = true)]
+    pub depends_on: Vec<String>,
     /// Emit machine-readable JSON output (when meaningful).
     #[arg(long, global = true)]
     pub json: bool,
@@ -109,6 +118,12 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Decide native JavaScript dialogs (alert, confirm, prompt, beforeunload).
+    Dialog(dialog_control::DialogCmd),
+    /// Retrieve or cancel the original operation suspended by a native dialog.
+    Operation(dialog_control::OperationCmd),
+    /// Cooperate with a person on the same browser tab.
+    Cooperate(cooperate::CooperateArgs),
     /// Manage the local `bsk` daemon process.
     #[command(subcommand)]
     Daemon(DaemonCmd),
