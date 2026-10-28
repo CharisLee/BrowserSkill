@@ -8,6 +8,7 @@ import { getAuditEnabled } from "@/lib/audit";
 import { attachAuditBridge } from "@/lib/audit-bridge";
 import { ConnectionController } from "@/lib/connection-controller";
 import { watchDaemonConnection } from "@/lib/daemon-connection-preference";
+import { attachDaemonUpgradeNotice } from "@/lib/daemon-upgrade-notice";
 import { startHeartbeat } from "@/lib/heartbeat";
 import {
   getConnectionEnabled,
@@ -35,6 +36,7 @@ import { attachSessionsLiveFlag } from "@/lib/sessions-live-flag";
 import { captureTaskPreview, focusTask } from "@/lib/task-preview";
 import { attachUiChannel } from "@/lib/ui-channel";
 import { attachLongScreenshot } from "@/long-screenshot/background";
+import { AgentWindowTabGroups } from "@/session-manager/agent-window-tab-group";
 import { createDisconnectCleanup } from "@/session-manager/disconnect-cleanup";
 import { attachSessionEventHandler } from "@/session-manager/event-handler";
 import { isAgentControlledTab, SessionManager } from "@/session-manager/manager";
@@ -89,6 +91,7 @@ export default defineBackground(() => {
     },
   });
   const sessions = new SessionManager({ remote: () => remoteEndpoint !== null });
+  const windowTabGroups = new AgentWindowTabGroups(sessions);
   const cooperation = attachCooperation(
     sessions,
     (tabId) => {
@@ -108,10 +111,12 @@ export default defineBackground(() => {
       }
     },
   );
+  // Default collaboration is always present; only explicit help or recording
+  // suspends routing of unrelated tabs out of the task window.
   const windowRouting = new AgentWindowRouting(
     sessions,
     chrome,
-    (id) => hasActiveHelp(id) || hasActiveRecording(id) || cooperation.hasSession(id),
+    (id) => hasActiveHelp(id) || hasActiveRecording(id),
   );
   attachLongScreenshot({
     isTabBusy: (tabId) => sessions.list().some((session) => isAgentControlledTab(session, tabId)),
@@ -131,6 +136,7 @@ export default defineBackground(() => {
   const debug = new DebugManager(sessions, cdp, chrome.tabs, Date.now, new LocalDebugArchive());
   attachDebugBridge(sessions, debug);
   const videoHost = new BrowserVideoHost();
+  let upgradeNotice: ReturnType<typeof attachDaemonUpgradeNotice> | undefined;
   const video = new VideoManager({
     sessions,
     cdp,
@@ -163,9 +169,13 @@ export default defineBackground(() => {
       }
     },
     changed: () => {
-      void chrome.action.setBadgeBackgroundColor({ color: "#dc2626" });
-      void chrome.action.setBadgeText({ text: video.isRecording() ? "REC" : "" });
+      upgradeNotice?.refresh();
     },
+  });
+  upgradeNotice = attachDaemonUpgradeNotice({
+    controller,
+    connectionKey: () => requestedConnection?.key ?? "unavailable",
+    isRecording: () => video.isRecording(),
   });
   attachVideoBridge(video, videoHost, (sessionId) => handleOverlayInterrupt(transport, sessionId));
   chrome.webNavigation.onBeforeNavigate.addListener((details) => {
@@ -307,6 +317,7 @@ export default defineBackground(() => {
   }
 
   function onOverlaySessionStateChanged(): void {
+    windowTabGroups.sync();
     cooperation.syncSessions();
     windowRouting.sync();
     debug.sync();
@@ -427,6 +438,7 @@ export default defineBackground(() => {
     onSessionsChanged: onOverlaySessionStateChanged,
     onBrowserControlResumed,
     onAgentTabClaimed: (tabId, windowId) => {
+      windowTabGroups.sync();
       void cooperation.observeTab(tabId).catch(() => {});
       void pushOverlayStateForTab(tabId, windowId);
     },
